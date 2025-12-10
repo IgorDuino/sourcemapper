@@ -33,6 +33,7 @@ type config struct {
 	url      string     // sourcemap url
 	jsurl    string     // javascript url
 	file     string     // file containing URLs
+	stdin    bool       // read URLs from stdin
 	proxy    string     // upstream proxy server
 	insecure bool       // skip tls verification
 	headers  headerList // additional user-supplied http headers
@@ -303,6 +304,25 @@ func readURLsFromFile(filepath string) ([]string, error) {
 	return urls, nil
 }
 
+// readURLsFromStdin reads URLs from stdin, one URL per line
+func readURLsFromStdin() ([]string, error) {
+	var urls []string
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line != "" && !strings.HasPrefix(line, "#") {
+			urls = append(urls, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return urls, nil
+}
+
 // processSourceMap processes a single sourcemap and writes its sources to disk
 func processSourceMap(sm sourceMap, outdir string) error {
 	log.Printf("[+] Retrieved Sourcemap with version %d, containing %d entries.\n", sm.Version, len(sm.Sources))
@@ -350,16 +370,17 @@ func main() {
 	var err error
 
 	flag.StringVar(&conf.outdir, "output", "", "Source file output directory - REQUIRED")
-	flag.StringVar(&conf.url, "url", "", "URL or path to the Sourcemap file - cannot be used with jsurl or file")
-	flag.StringVar(&conf.jsurl, "jsurl", "", "URL to JavaScript file - cannot be used with url or file")
-	flag.StringVar(&conf.file, "file", "", "File containing URLs (one per line) - cannot be used with url or jsurl")
+	flag.StringVar(&conf.url, "url", "", "URL or path to the Sourcemap file - cannot be used with jsurl, file, or stdin")
+	flag.StringVar(&conf.jsurl, "jsurl", "", "URL to JavaScript file - cannot be used with url, file, or stdin")
+	flag.StringVar(&conf.file, "file", "", "File containing URLs (one per line) - cannot be used with url, jsurl, or stdin")
+	flag.BoolVar(&conf.stdin, "stdin", false, "Read URLs from stdin (one per line) - cannot be used with url, jsurl, or file")
 	flag.StringVar(&conf.proxy, "proxy", "", "Proxy URL")
 	help := flag.Bool("help", false, "Show help")
 	flag.BoolVar(&conf.insecure, "insecure", false, "Ignore invalid TLS certificates")
 	flag.Var(&conf.headers, "header", "A header to send with the request, similar to curl's -H. Can be set multiple times, EG: \"./sourcemapper --header \"Cookie: session=bar\" --header \"Authorization: blerp\"")
 	flag.Parse()
 
-	if *help || (conf.url == "" && conf.jsurl == "" && conf.file == "") || conf.outdir == "" {
+	if *help || (conf.url == "" && conf.jsurl == "" && conf.file == "" && !conf.stdin) || conf.outdir == "" {
 		flag.Usage()
 		return
 	}
@@ -375,9 +396,12 @@ func main() {
 	if conf.file != "" {
 		flagCount++
 	}
+	if conf.stdin {
+		flagCount++
+	}
 
 	if flagCount > 1 {
-		log.Println("[!] Only one of -url, -jsurl, or -file can be specified")
+		log.Println("[!] Only one of -url, -jsurl, -file, or -stdin can be specified")
 		flag.Usage()
 		return
 	}
@@ -388,6 +412,46 @@ func main() {
 			log.Fatal(err)
 		}
 		proxyURL = *p
+	}
+
+	// Process URLs from stdin if -stdin flag is provided
+	if conf.stdin {
+		urls, err := readURLsFromStdin()
+		if err != nil {
+			log.Fatalf("[!] Error reading from stdin: %v", err)
+		}
+
+		if len(urls) == 0 {
+			log.Fatal("[!] No URLs found in stdin")
+		}
+
+		log.Printf("[+] Processing %d URLs from stdin\n", len(urls))
+
+		for idx, urlStr := range urls {
+			log.Printf("[+] Processing URL %d/%d: %s\n", idx+1, len(urls), urlStr)
+
+			var sm sourceMap
+			// Determine if this is a JS URL or sourcemap URL
+			// For simplicity, we'll try to detect .js files and use getSourceMapFromJS
+			// otherwise use getSourceMap
+			if strings.HasSuffix(urlStr, ".js") {
+				sm, err = getSourceMapFromJS(urlStr, conf.headers, conf.insecure, proxyURL)
+			} else {
+				sm, err = getSourceMap(urlStr, conf.headers, conf.insecure, proxyURL)
+			}
+
+			if err != nil {
+				log.Printf("[!] Error processing URL %s: %v\n", urlStr, err)
+				continue
+			}
+
+			if err := processSourceMap(sm, conf.outdir); err != nil {
+				log.Printf("[!] Error processing sourcemap for %s: %v\n", urlStr, err)
+			}
+		}
+
+		log.Println("[+] Done")
+		return
 	}
 
 	// Process URLs from file if -file flag is provided
