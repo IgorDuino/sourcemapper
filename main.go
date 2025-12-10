@@ -364,6 +364,44 @@ func processSourceMap(sm sourceMap, outdir string) error {
 	return nil
 }
 
+// getSourceMapFromURL retrieves a sourcemap from a URL, automatically detecting
+// whether it's a JavaScript file or sourcemap based on the URL extension
+func getSourceMapFromURL(urlStr string, headers []string, insecureTLS bool, proxyURL url.URL) (sourceMap, error) {
+	// Check for .js.map first (sourcemap), then .js (JavaScript)
+	if strings.HasSuffix(urlStr, ".js.map") || strings.HasSuffix(urlStr, ".map") {
+		return getSourceMap(urlStr, headers, insecureTLS, proxyURL)
+	} else if strings.HasSuffix(urlStr, ".js") {
+		return getSourceMapFromJS(urlStr, headers, insecureTLS, proxyURL)
+	}
+	// Default to treating as sourcemap for other extensions
+	return getSourceMap(urlStr, headers, insecureTLS, proxyURL)
+}
+
+// processURLs processes multiple URLs from a list
+func processURLs(urls []string, source string, outdir string, headers []string, insecureTLS bool, proxyURL url.URL) {
+	if len(urls) == 0 {
+		log.Fatalf("[!] No URLs found in %s", source)
+	}
+
+	log.Printf("[+] Processing %d URLs from %s\n", len(urls), source)
+
+	for idx, urlStr := range urls {
+		log.Printf("[+] Processing URL %d/%d: %s\n", idx+1, len(urls), urlStr)
+
+		sm, err := getSourceMapFromURL(urlStr, headers, insecureTLS, proxyURL)
+		if err != nil {
+			log.Printf("[!] Error processing URL %s: %v\n", urlStr, err)
+			continue
+		}
+
+		if err := processSourceMap(sm, outdir); err != nil {
+			log.Printf("[!] Error processing sourcemap for %s: %v\n", urlStr, err)
+		}
+	}
+
+	log.Println("[+] Done")
+}
+
 func main() {
 	var proxyURL url.URL
 	var conf config
@@ -420,37 +458,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[!] Error reading from stdin: %v", err)
 		}
-
-		if len(urls) == 0 {
-			log.Fatal("[!] No URLs found in stdin")
-		}
-
-		log.Printf("[+] Processing %d URLs from stdin\n", len(urls))
-
-		for idx, urlStr := range urls {
-			log.Printf("[+] Processing URL %d/%d: %s\n", idx+1, len(urls), urlStr)
-
-			var sm sourceMap
-			// Determine if this is a JS URL or sourcemap URL
-			// For simplicity, we'll try to detect .js files and use getSourceMapFromJS
-			// otherwise use getSourceMap
-			if strings.HasSuffix(urlStr, ".js") {
-				sm, err = getSourceMapFromJS(urlStr, conf.headers, conf.insecure, proxyURL)
-			} else {
-				sm, err = getSourceMap(urlStr, conf.headers, conf.insecure, proxyURL)
-			}
-
-			if err != nil {
-				log.Printf("[!] Error processing URL %s: %v\n", urlStr, err)
-				continue
-			}
-
-			if err := processSourceMap(sm, conf.outdir); err != nil {
-				log.Printf("[!] Error processing sourcemap for %s: %v\n", urlStr, err)
-			}
-		}
-
-		log.Println("[+] Done")
+		processURLs(urls, "stdin", conf.outdir, conf.headers, conf.insecure, proxyURL)
 		return
 	}
 
@@ -460,37 +468,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[!] Error reading file: %v", err)
 		}
-
-		if len(urls) == 0 {
-			log.Fatal("[!] No URLs found in file")
-		}
-
-		log.Printf("[+] Processing %d URLs from file %s\n", len(urls), conf.file)
-
-		for idx, urlStr := range urls {
-			log.Printf("[+] Processing URL %d/%d: %s\n", idx+1, len(urls), urlStr)
-
-			var sm sourceMap
-			// Determine if this is a JS URL or sourcemap URL
-			// For simplicity, we'll try to detect .js files and use getSourceMapFromJS
-			// otherwise use getSourceMap
-			if strings.HasSuffix(urlStr, ".js") {
-				sm, err = getSourceMapFromJS(urlStr, conf.headers, conf.insecure, proxyURL)
-			} else {
-				sm, err = getSourceMap(urlStr, conf.headers, conf.insecure, proxyURL)
-			}
-
-			if err != nil {
-				log.Printf("[!] Error processing URL %s: %v\n", urlStr, err)
-				continue
-			}
-
-			if err := processSourceMap(sm, conf.outdir); err != nil {
-				log.Printf("[!] Error processing sourcemap for %s: %v\n", urlStr, err)
-			}
-		}
-
-		log.Println("[+] Done")
+		processURLs(urls, "file "+conf.file, conf.outdir, conf.headers, conf.insecure, proxyURL)
 		return
 	}
 
