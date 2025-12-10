@@ -367,10 +367,23 @@ func processSourceMap(sm sourceMap, outdir string) error {
 // getSourceMapFromURL retrieves a sourcemap from a URL, automatically detecting
 // whether it's a JavaScript file or sourcemap based on the URL extension
 func getSourceMapFromURL(urlStr string, headers []string, insecureTLS bool, proxyURL url.URL) (sourceMap, error) {
-	// Check for .js.map first (sourcemap), then .js (JavaScript)
-	if strings.HasSuffix(urlStr, ".js.map") || strings.HasSuffix(urlStr, ".map") {
+	// Parse the URL to extract the path without query parameters or fragments
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		// If URL parsing fails, fall back to simple string matching
+		if strings.HasSuffix(urlStr, ".js.map") || strings.HasSuffix(urlStr, ".map") {
+			return getSourceMap(urlStr, headers, insecureTLS, proxyURL)
+		} else if strings.HasSuffix(urlStr, ".js") {
+			return getSourceMapFromJS(urlStr, headers, insecureTLS, proxyURL)
+		}
 		return getSourceMap(urlStr, headers, insecureTLS, proxyURL)
-	} else if strings.HasSuffix(urlStr, ".js") {
+	}
+
+	// Check the path component for file extensions
+	path := parsedURL.Path
+	if strings.HasSuffix(path, ".js.map") || strings.HasSuffix(path, ".map") {
+		return getSourceMap(urlStr, headers, insecureTLS, proxyURL)
+	} else if strings.HasSuffix(path, ".js") {
 		return getSourceMapFromJS(urlStr, headers, insecureTLS, proxyURL)
 	}
 	// Default to treating as sourcemap for other extensions
